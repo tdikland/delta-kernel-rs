@@ -5,11 +5,12 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use roaring::RoaringTreemap;
+use serde::Serialize;
 use url::Url;
 
 use crate::{DeltaResult, Error, FileSystemClient};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeletionVectorDescriptor {
     /// A single character to indicate how to access the DV. Legal options are: ['u', 'i', 'p'].
     pub storage_type: String,
