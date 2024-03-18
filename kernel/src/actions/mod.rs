@@ -1,7 +1,7 @@
 /// Code to parse and handle actions from the delta log
-pub(crate) mod deletion_vector;
-pub(crate) mod schemas;
-pub(crate) mod visitors;
+pub mod deletion_vector;
+pub mod schemas;
+pub mod visitors;
 
 use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
@@ -9,7 +9,7 @@ use visitors::{AddVisitor, MetadataVisitor, ProtocolVisitor};
 
 use crate::{schema::StructType, DeltaResult, EngineData};
 
-use self::deletion_vector::DeletionVectorDescriptor;
+pub use self::deletion_vector::DeletionVectorDescriptor;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Eq)]
 #[serde(rename_all = "camelCase")]
