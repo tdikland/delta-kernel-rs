@@ -12,6 +12,7 @@ use crate::{schema::StructType, DeltaResult, EngineData};
 use self::deletion_vector::DeletionVectorDescriptor;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct Format {
     /// Name of the encoding for files in this table
     pub provider: String,
@@ -29,6 +30,7 @@ impl Default for Format {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Metadata {
     /// Unique identifier for this table
     pub id: String,
@@ -62,6 +64,7 @@ impl Metadata {
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Protocol {
     /// The minimum version of the Delta read protocol that a client must implement
     /// in order to correctly read this table
@@ -87,6 +90,7 @@ impl Protocol {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Add {
     /// A relative path to a data file from the root of the table or an absolute path to a file
     /// that should be added to the table. The path is a URI as specified by
@@ -145,7 +149,8 @@ impl Add {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Eq)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct Remove {
     /// A relative path to a data file from the root of the table or an absolute path to a file
     /// that should be added to the table. The path is a URI as specified by
