@@ -3,7 +3,7 @@ pub mod deletion_vector;
 pub mod schemas;
 pub mod visitors;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use visitors::{AddVisitor, MetadataVisitor, ProtocolVisitor};
 
@@ -11,7 +11,7 @@ use crate::{schema::StructType, DeltaResult, EngineData};
 
 pub use self::deletion_vector::DeletionVectorDescriptor;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Format {
     /// Name of the encoding for files in this table
@@ -29,7 +29,7 @@ impl Default for Format {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Metadata {
     /// Unique identifier for this table
@@ -63,7 +63,7 @@ impl Metadata {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Protocol {
     /// The minimum version of the Delta read protocol that a client must implement
@@ -89,7 +89,7 @@ impl Protocol {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Add {
     /// A relative path to a data file from the root of the table or an absolute path to a file
@@ -149,7 +149,7 @@ impl Add {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Remove {
     /// A relative path to a data file from the root of the table or an absolute path to a file
