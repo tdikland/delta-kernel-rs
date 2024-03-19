@@ -31,16 +31,16 @@ z85 = "3.0.5"
 visibility = "0.1.0"
 
 # Used in default client
-arrow-array = { version = "^49.0", optional = true }
-arrow-select = { version = "^49.0", optional = true }
-arrow-arith = { version = "^49.0", optional = true }
-arrow-json = { version = "^49.0", optional = true }
-arrow-ord = { version = "^49.0", optional = true }
-arrow-schema = { version = "^49.0", optional = true }
+arrow-array = { version = "^50.0", optional = true }
+arrow-select = { version = "^50.0", optional = true }
+arrow-arith = { version = "^50.0", optional = true }
+arrow-json = { version = "^50.0", optional = true }
+arrow-ord = { version = "^50.0", optional = true }
+arrow-schema = { version = "^50.0", optional = true }
 futures = { version = "0.3", optional = true }
-object_store = { version = "^0.8.0", optional = true }
+object_store = { version = "^0.9.0", optional = true }
 # Used in default and simple client
-parquet = { version = "^49.0", optional = true }
+parquet = { version = "^50.0", optional = true }
 
 # optionally used with default client (though not required)
 tokio = { version = "1", optional = true, features = ["rt-multi-thread"] }
@@ -60,7 +60,7 @@ default-client = [
   "object_store",
   "parquet/async",
   "parquet/object_store",
-  "tokio"
+  "tokio",
 ]
 
 developer-visibility = []
@@ -69,7 +69,7 @@ simple-client = [
   "arrow-conversion",
   "arrow-json",
   "arrow-select",
-  "parquet"
+  "parquet",
 ]
 
 [dev-dependencies]
