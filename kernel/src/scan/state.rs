@@ -1,17 +1,18 @@
 //! This module encapsulates the state of a scan
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
+use crate::actions::deletion_vector::deletion_treemap_to_bools;
+use crate::utils::require;
 use crate::{
-    actions::{
-        deletion_vector::{treemap_to_bools, DeletionVectorDescriptor},
-        visitors::visit_deletion_vector_at,
-    },
-    engine_data::{GetData, TypedGetData},
-    features::ColumnMappingMode,
-    schema::SchemaRef,
-    DataVisitor, DeltaResult, Engine, EngineData, Error,
+    actions::{deletion_vector::DeletionVectorDescriptor, visitors::visit_deletion_vector_at},
+    engine_data::{GetData, RowVisitor, TypedGetData as _},
+    schema::{ColumnName, ColumnNamesAndTypes, DataType, SchemaRef},
+    table_features::ColumnMappingMode,
+    DeltaResult, Engine, EngineData, Error,
 };
+use roaring::RoaringTreemap;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -23,14 +24,21 @@ pub struct GlobalScanState {
     pub table_root: String,
     pub partition_columns: Vec<String>,
     pub logical_schema: SchemaRef,
-    pub read_schema: SchemaRef,
+    pub physical_schema: SchemaRef,
     pub column_mapping_mode: ColumnMappingMode,
 }
 
 /// this struct can be used by an engine to materialize a selection vector
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct DvInfo {
     pub(crate) deletion_vector: Option<DeletionVectorDescriptor>,
+}
+
+impl From<DeletionVectorDescriptor> for DvInfo {
+    fn from(deletion_vector: DeletionVectorDescriptor) -> Self {
+        let deletion_vector = Some(deletion_vector);
+        DvInfo { deletion_vector }
+    }
 }
 
 /// Give engines an easy way to consume stats
@@ -51,20 +59,27 @@ impl DvInfo {
         self.deletion_vector.is_some()
     }
 
-    pub fn get_selection_vector(
+    pub(crate) fn get_treemap(
         &self,
         engine: &dyn Engine,
         table_root: &url::Url,
-    ) -> DeltaResult<Option<Vec<bool>>> {
-        let dv_treemap = self
-            .deletion_vector
+    ) -> DeltaResult<Option<RoaringTreemap>> {
+        self.deletion_vector
             .as_ref()
             .map(|dv_descriptor| {
                 let fs_client = engine.get_file_system_client();
                 dv_descriptor.read(fs_client, table_root)
             })
-            .transpose()?;
-        Ok(dv_treemap.map(treemap_to_bools))
+            .transpose()
+    }
+
+    pub fn get_selection_vector(
+        &self,
+        engine: &dyn Engine,
+        table_root: &url::Url,
+    ) -> DeltaResult<Option<Vec<bool>>> {
+        let dv_treemap = self.get_treemap(engine, table_root)?;
+        Ok(dv_treemap.map(deletion_treemap_to_bools))
     }
 
     /// Returns a vector of row indexes that should be *removed* from the result set
@@ -110,11 +125,11 @@ pub type ScanCallback<T> = fn(
 /// ## Example
 /// ```ignore
 /// let mut context = [my context];
-/// for res in scan_data { // scan data from scan.get_scan_data()
+/// for res in scan_data { // scan data from scan.scan_data()
 ///     let (data, vector) = res?;
 ///     context = delta_kernel::scan::state::visit_scan_files(
 ///        data.as_ref(),
-///        vector,
+///        selection_vector,
 ///        context,
 ///        my_callback,
 ///     )?;
@@ -131,7 +146,7 @@ pub fn visit_scan_files<T>(
         selection_vector,
         context,
     };
-    data.extract(super::log_replay::SCAN_ROW_SCHEMA.clone(), &mut visitor)?;
+    visitor.visit_rows_of(data)?;
     Ok(visitor.context)
 }
 
@@ -141,9 +156,20 @@ struct ScanFileVisitor<'a, T> {
     selection_vector: &'a [bool],
     context: T,
 }
-
-impl<T> DataVisitor for ScanFileVisitor<'_, T> {
+impl<T> RowVisitor for ScanFileVisitor<'_, T> {
+    fn selected_column_names_and_types(&self) -> (&'static [ColumnName], &'static [DataType]) {
+        static NAMES_AND_TYPES: LazyLock<ColumnNamesAndTypes> =
+            LazyLock::new(|| SCAN_ROW_SCHEMA.leaves(None));
+        NAMES_AND_TYPES.as_ref()
+    }
     fn visit<'a>(&mut self, row_count: usize, getters: &[&'a dyn GetData<'a>]) -> DeltaResult<()> {
+        require!(
+            getters.len() == 10,
+            Error::InternalError(format!(
+                "Wrong number of ScanFileVisitor getters: {}",
+                getters.len()
+            ))
+        );
         for row_index in 0..row_count {
             if !self.selection_vector[row_index] {
                 // skip skipped rows
@@ -224,6 +250,8 @@ mod tests {
         let context = TestContext { id: 2 };
         run_with_validate_callback(
             vec![add_batch_simple()],
+            None, // not testing schema
+            None, // not testing transform
             &[true, false],
             context,
             validate_visit,

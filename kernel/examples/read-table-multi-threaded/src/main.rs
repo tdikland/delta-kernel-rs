@@ -104,7 +104,7 @@ fn truncate_batch(batch: RecordBatch, rows: usize) -> RecordBatch {
     RecordBatch::try_new(batch.schema(), cols).unwrap()
 }
 
-// This is the callback that will be called fo each valid scan row
+// This is the callback that will be called for each valid scan row
 fn send_scan_file(
     scan_tx: &mut spmc::Sender<ScanFile>,
     path: &str,
@@ -125,7 +125,7 @@ fn send_scan_file(
 fn try_main() -> DeltaResult<()> {
     let cli = Cli::parse();
 
-    // build a table and get the lastest snapshot from it
+    // build a table and get the latest snapshot from it
     let table = Table::try_from_uri(&cli.path)?;
     println!("Reading {}", table.location());
 
@@ -210,7 +210,7 @@ fn try_main() -> DeltaResult<()> {
     drop(record_batch_tx);
 
     for res in scan_data {
-        let (data, vector) = res?;
+        let (data, vector, _transforms) = res?;
         scan_file_tx = delta_kernel::scan::state::visit_scan_files(
             data.as_ref(),
             &vector,
@@ -256,7 +256,7 @@ fn do_work(
 ) {
     // get the type for the function calls
     let engine: &dyn Engine = engine.as_ref();
-    let read_schema = scan_state.read_schema.clone();
+    let physical_schema = scan_state.physical_schema.clone();
     // in a loop, try and get a ScanFile. Note that `recv` will return an `Err` when the other side
     // hangs up, which indicates there's no more data to process.
     while let Ok(scan_file) = scan_file_rx.recv() {
@@ -279,7 +279,7 @@ fn do_work(
 
         // this example uses the parquet_handler from the engine, but an engine could
         // choose to use whatever method it might want to read a parquet file. The reader
-        // could, for example, fill in the parition columns, or apply deletion vectors. Here
+        // could, for example, fill in the partition columns, or apply deletion vectors. Here
         // we assume a more naive parquet reader and fix the data up after the fact.
         // further parallelism would also be possible here as we could read the parquet file
         // in chunks where each thread reads one chunk. The engine would need to ensure
@@ -287,7 +287,7 @@ fn do_work(
         // vector
         let read_results = engine
             .get_parquet_handler()
-            .read_parquet_files(&[meta], read_schema.clone(), None)
+            .read_parquet_files(&[meta], physical_schema.clone(), None)
             .unwrap();
 
         for read_result in read_results {

@@ -29,9 +29,9 @@ pub(crate) static WRITE_METADATA_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| 
     ]))
 });
 
-/// Get the expected schema for [`write_metadata`].
+/// Get the expected schema for engine data passed to [`add_write_metadata`].
 ///
-/// [`write_metadata`]: crate::transaction::Transaction::write_metadata
+/// [`add_write_metadata`]: crate::transaction::Transaction::add_write_metadata
 pub fn get_write_metadata_schema() -> &'static SchemaRef {
     &WRITE_METADATA_SCHEMA
 }
@@ -74,13 +74,18 @@ impl Transaction {
     /// Instead of using this API, the more typical (user-facing) API is
     /// [Table::new_transaction](crate::table::Table::new_transaction) to create a transaction from
     /// a table automatically backed by the latest snapshot.
-    pub(crate) fn new(snapshot: impl Into<Arc<Snapshot>>) -> Self {
-        Transaction {
-            read_snapshot: snapshot.into(),
+    pub(crate) fn try_new(snapshot: impl Into<Arc<Snapshot>>) -> DeltaResult<Self> {
+        let read_snapshot = snapshot.into();
+
+        // important! before a read/write to the table we must check it is supported
+        read_snapshot.protocol().ensure_write_supported()?;
+
+        Ok(Transaction {
+            read_snapshot,
             operation: None,
             commit_info: None,
             write_metadata: vec![],
-        }
+        })
     }
 
     /// Consume the transaction and commit it to the table. The result is a [CommitResult] which
@@ -236,7 +241,7 @@ impl WriteContext {
 /// Result after committing a transaction. If 'committed', the version is the new version written
 /// to the log. If 'conflict', the transaction is returned so the caller can resolve the conflict
 /// (along with the version which conflicted).
-// TODO(zach): in order to make the returning of a transcation useful, we need to add APIs to
+// TODO(zach): in order to make the returning of a transaction useful, we need to add APIs to
 // update the transaction to a new version etc.
 #[derive(Debug)]
 pub enum CommitResult {
@@ -272,10 +277,9 @@ fn generate_commit_info(
         // HACK (part 1/2): since we don't have proper map support, we create a literal struct with
         // one null field to create data that serializes as "operationParameters": {}
         Expression::literal(Scalar::Struct(StructData::try_new(
-            vec![StructField::new(
+            vec![StructField::nullable(
                 "operation_parameter_int",
                 DataType::INTEGER,
-                true,
             )],
             vec![Scalar::Null(DataType::INTEGER)],
         )?)),
@@ -299,10 +303,9 @@ fn generate_commit_info(
     };
     let engine_commit_info_schema =
         commit_info_data_type.project_as_struct(&["engineCommitInfo"])?;
-    let hack_data_type = DataType::Struct(Box::new(StructType::new(vec![StructField::new(
+    let hack_data_type = DataType::Struct(Box::new(StructType::new(vec![StructField::nullable(
         "hack_operation_parameter_int",
         DataType::INTEGER,
-        true,
     )])));
 
     commit_info_data_type
@@ -310,6 +313,12 @@ fn generate_commit_info(
         .get_mut("operationParameters")
         .ok_or_else(|| Error::missing_column("operationParameters"))?
         .data_type = hack_data_type;
+
+    // Since writing in-commit timestamps is not supported, we remove the field so it is not
+    // written to the log
+    commit_info_data_type
+        .fields
+        .shift_remove("inCommitTimestamp");
     commit_info_field.data_type = DataType::Struct(commit_info_data_type);
 
     let commit_info_evaluator = engine.get_expression_handler().get_evaluator(
@@ -666,15 +675,14 @@ mod tests {
     fn test_write_metadata_schema() {
         let schema = get_write_metadata_schema();
         let expected = StructType::new(vec![
-            StructField::new("path", DataType::STRING, false),
-            StructField::new(
+            StructField::not_null("path", DataType::STRING),
+            StructField::not_null(
                 "partitionValues",
                 MapType::new(DataType::STRING, DataType::STRING, true),
-                false,
             ),
-            StructField::new("size", DataType::LONG, false),
-            StructField::new("modificationTime", DataType::LONG, false),
-            StructField::new("dataChange", DataType::BOOLEAN, false),
+            StructField::not_null("size", DataType::LONG),
+            StructField::not_null("modificationTime", DataType::LONG),
+            StructField::not_null("dataChange", DataType::BOOLEAN),
         ]);
         assert_eq!(*schema, expected.into());
     }

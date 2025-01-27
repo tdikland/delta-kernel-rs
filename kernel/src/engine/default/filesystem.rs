@@ -68,7 +68,7 @@ impl<E: TaskExecutor> FileSystemClient for ObjectStoreFileSystemClient<E> {
                         sender
                             .send(Ok(FileMeta {
                                 location,
-                                last_modified: meta.last_modified.timestamp(),
+                                last_modified: meta.last_modified.timestamp_millis(),
                                 size: meta.size,
                             }))
                             .ok();
@@ -155,8 +155,12 @@ impl<E: TaskExecutor> FileSystemClient for ObjectStoreFileSystemClient<E> {
 #[cfg(test)]
 mod tests {
     use std::ops::Range;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    use object_store::memory::InMemory;
     use object_store::{local::LocalFileSystem, ObjectStore};
+
+    use test_utils::{abs_diff, delta_path_for_version};
 
     use crate::engine::default::executor::tokio::TokioBackgroundExecutor;
     use crate::engine::default::DefaultEngine;
@@ -215,21 +219,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_file_meta_is_correct() {
+        let store = Arc::new(InMemory::new());
+
+        let begin_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+
+        let data = Bytes::from("kernel-data");
+        let name = delta_path_for_version(1, "json");
+        store.put(&name, data.clone().into()).await.unwrap();
+
+        let table_root = Url::parse("memory:///").expect("valid url");
+        let prefix = Path::from_url_path(table_root.path()).expect("Couldn't get path");
+        let engine = DefaultEngine::new(store, prefix, Arc::new(TokioBackgroundExecutor::new()));
+        let files: Vec<_> = engine
+            .get_file_system_client()
+            .list_from(&table_root)
+            .unwrap()
+            .try_collect()
+            .unwrap();
+
+        assert!(!files.is_empty());
+        for meta in files.into_iter() {
+            let meta_time = Duration::from_millis(meta.last_modified.try_into().unwrap());
+            assert!(abs_diff(meta_time, begin_time) < Duration::from_secs(10));
+        }
+    }
+    #[tokio::test]
     async fn test_default_engine_listing() {
         let tmp = tempfile::tempdir().unwrap();
         let tmp_store = LocalFileSystem::new_with_prefix(tmp.path()).unwrap();
         let data = Bytes::from("kernel-data");
 
-        let expected_names: Vec<String> = (0..10)
-            .map(|i| format!("_delta_log/{:0>20}.json", i))
-            .collect();
+        let expected_names: Vec<Path> =
+            (0..10).map(|i| delta_path_for_version(i, "json")).collect();
 
         // put them in in reverse order
         for name in expected_names.iter().rev() {
-            tmp_store
-                .put(&Path::from(name.as_str()), data.clone().into())
-                .await
-                .unwrap();
+            tmp_store.put(name, data.clone().into()).await.unwrap();
         }
 
         let url = Url::from_directory_path(tmp.path()).unwrap();
@@ -242,7 +268,11 @@ mod tests {
         let mut len = 0;
         for (file, expected) in files.zip(expected_names.iter()) {
             assert!(
-                file.as_ref().unwrap().location.path().ends_with(expected),
+                file.as_ref()
+                    .unwrap()
+                    .location
+                    .path()
+                    .ends_with(expected.as_ref()),
                 "{} does not end with {}",
                 file.unwrap().location.path(),
                 expected

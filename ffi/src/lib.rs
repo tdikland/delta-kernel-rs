@@ -1,6 +1,7 @@
-/// FFI interface for the delta kernel
-///
-/// Exposes that an engine needs to call from C/C++ to interface with kernel
+//! FFI interface for the delta kernel
+//!
+//! Exposes that an engine needs to call from C/C++ to interface with kernel
+
 #[cfg(feature = "default-engine")]
 use std::collections::HashMap;
 use std::default::Default;
@@ -11,7 +12,7 @@ use tracing::debug;
 use url::Url;
 
 use delta_kernel::snapshot::Snapshot;
-use delta_kernel::{DeltaResult, Engine, EngineData, Error, Table};
+use delta_kernel::{DeltaResult, Engine, EngineData, Table};
 use delta_kernel_ffi_macros::handle_descriptor;
 
 // cbindgen doesn't understand our use of feature flags here, and by default it parses `mod handle`
@@ -29,8 +30,13 @@ use handle::Handle;
 // relies on `crate::`
 extern crate self as delta_kernel_ffi;
 
+pub mod engine_data;
 pub mod engine_funcs;
+pub mod error;
+use error::{AllocateError, AllocateErrorFn, ExternResult, IntoExternResult};
 pub mod expressions;
+#[cfg(feature = "tracing")]
+pub mod ffi_tracing;
 pub mod scan;
 pub mod schema;
 #[cfg(feature = "test-ffi")]
@@ -337,200 +343,6 @@ pub unsafe extern "C" fn free_engine_data(engine_data: Handle<ExclusiveEngineDat
     engine_data.drop_handle();
 }
 
-#[repr(C)]
-#[derive(Debug)]
-pub enum KernelError {
-    UnknownError, // catch-all for unrecognized kernel Error types
-    FFIError,     // errors encountered in the code layer that supports FFI
-    #[cfg(any(feature = "default-engine", feature = "sync-engine"))]
-    ArrowError,
-    EngineDataTypeError,
-    ExtractError,
-    GenericError,
-    IOErrorError,
-    #[cfg(any(feature = "default-engine", feature = "sync-engine"))]
-    ParquetError,
-    #[cfg(feature = "default-engine")]
-    ObjectStoreError,
-    #[cfg(feature = "default-engine")]
-    ObjectStorePathError,
-    #[cfg(feature = "default-engine")]
-    ReqwestError,
-    FileNotFoundError,
-    MissingColumnError,
-    UnexpectedColumnTypeError,
-    MissingDataError,
-    MissingVersionError,
-    DeletionVectorError,
-    InvalidUrlError,
-    MalformedJsonError,
-    MissingMetadataError,
-    MissingProtocolError,
-    MissingMetadataAndProtocolError,
-    ParseError,
-    JoinFailureError,
-    Utf8Error,
-    ParseIntError,
-    InvalidColumnMappingModeError,
-    InvalidTableLocationError,
-    InvalidDecimalError,
-    InvalidStructDataError,
-    InternalError,
-    InvalidExpression,
-    InvalidLogPath,
-    InvalidCommitInfo,
-    FileAlreadyExists,
-    MissingCommitInfo,
-}
-
-impl From<Error> for KernelError {
-    fn from(e: Error) -> Self {
-        match e {
-            // NOTE: By definition, no kernel Error maps to FFIError
-            #[cfg(any(feature = "default-engine", feature = "sync-engine"))]
-            Error::Arrow(_) => KernelError::ArrowError,
-            Error::EngineDataType(_) => KernelError::EngineDataTypeError,
-            Error::Extract(..) => KernelError::ExtractError,
-            Error::Generic(_) => KernelError::GenericError,
-            Error::GenericError { .. } => KernelError::GenericError,
-            Error::IOError(_) => KernelError::IOErrorError,
-            #[cfg(any(feature = "default-engine", feature = "sync-engine"))]
-            Error::Parquet(_) => KernelError::ParquetError,
-            #[cfg(feature = "default-engine")]
-            Error::ObjectStore(_) => KernelError::ObjectStoreError,
-            #[cfg(feature = "default-engine")]
-            Error::ObjectStorePath(_) => KernelError::ObjectStorePathError,
-            #[cfg(feature = "default-engine")]
-            Error::Reqwest(_) => KernelError::ReqwestError,
-            Error::FileNotFound(_) => KernelError::FileNotFoundError,
-            Error::MissingColumn(_) => KernelError::MissingColumnError,
-            Error::UnexpectedColumnType(_) => KernelError::UnexpectedColumnTypeError,
-            Error::MissingData(_) => KernelError::MissingDataError,
-            Error::MissingVersion => KernelError::MissingVersionError,
-            Error::DeletionVector(_) => KernelError::DeletionVectorError,
-            Error::InvalidUrl(_) => KernelError::InvalidUrlError,
-            Error::MalformedJson(_) => KernelError::MalformedJsonError,
-            Error::MissingMetadata => KernelError::MissingMetadataError,
-            Error::MissingProtocol => KernelError::MissingProtocolError,
-            Error::MissingMetadataAndProtocol => KernelError::MissingMetadataAndProtocolError,
-            Error::ParseError(..) => KernelError::ParseError,
-            Error::JoinFailure(_) => KernelError::JoinFailureError,
-            Error::Utf8Error(_) => KernelError::Utf8Error,
-            Error::ParseIntError(_) => KernelError::ParseIntError,
-            Error::InvalidColumnMappingMode(_) => KernelError::InvalidColumnMappingModeError,
-            Error::InvalidTableLocation(_) => KernelError::InvalidTableLocationError,
-            Error::InvalidDecimal(_) => KernelError::InvalidDecimalError,
-            Error::InvalidStructData(_) => KernelError::InvalidStructDataError,
-            Error::InternalError(_) => KernelError::InternalError,
-            Error::Backtraced {
-                source,
-                backtrace: _,
-            } => Self::from(*source),
-            Error::InvalidExpressionEvaluation(_) => KernelError::InvalidExpression,
-            Error::InvalidLogPath(_) => KernelError::InvalidLogPath,
-            Error::InvalidCommitInfo(_) => KernelError::InvalidCommitInfo,
-            Error::FileAlreadyExists(_) => KernelError::FileAlreadyExists,
-            Error::MissingCommitInfo => KernelError::MissingCommitInfo,
-        }
-    }
-}
-
-/// An error that can be returned to the engine. Engines that wish to associate additional
-/// information can define and use any type that is [pointer
-/// interconvertible](https://en.cppreference.com/w/cpp/language/static_cast#pointer-interconvertible)
-/// with this one -- e.g. by subclassing this struct or by embedding this struct as the first member
-/// of a [standard layout](https://en.cppreference.com/w/cpp/language/data_members#Standard-layout)
-/// class.
-#[repr(C)]
-pub struct EngineError {
-    etype: KernelError,
-}
-
-/// Semantics: Kernel will always immediately return the leaked engine error to the engine (if it
-/// allocated one at all), and engine is responsible for freeing it.
-#[repr(C)]
-pub enum ExternResult<T> {
-    Ok(T),
-    Err(*mut EngineError),
-}
-
-pub type AllocateErrorFn =
-    extern "C" fn(etype: KernelError, msg: KernelStringSlice) -> *mut EngineError;
-
-// NOTE: We can't "just" impl From<DeltaResult<T>> because we require an error allocator.
-impl<T> ExternResult<T> {
-    pub fn is_ok(&self) -> bool {
-        match self {
-            Self::Ok(_) => true,
-            Self::Err(_) => false,
-        }
-    }
-    pub fn is_err(&self) -> bool {
-        !self.is_ok()
-    }
-}
-
-/// Represents an engine error allocator. Ultimately all implementations will fall back to an
-/// [`AllocateErrorFn`] provided by the engine, but the trait allows us to conveniently access the
-/// allocator in various types that may wrap it.
-pub trait AllocateError {
-    /// Allocates a new error in engine memory and returns the resulting pointer. The engine is
-    /// expected to copy the passed-in message, which is only guaranteed to remain valid until the
-    /// call returns. Kernel will always immediately return the result of this method to the engine.
-    ///
-    /// # Safety
-    ///
-    /// The string slice must be valid until the call returns, and the error allocator must also be
-    /// valid.
-    unsafe fn allocate_error(&self, etype: KernelError, msg: KernelStringSlice)
-        -> *mut EngineError;
-}
-
-impl AllocateError for AllocateErrorFn {
-    unsafe fn allocate_error(
-        &self,
-        etype: KernelError,
-        msg: KernelStringSlice,
-    ) -> *mut EngineError {
-        self(etype, msg)
-    }
-}
-
-impl AllocateError for &dyn ExternEngine {
-    /// # Safety
-    ///
-    /// In addition to the usual requirements, the engine handle must be valid.
-    unsafe fn allocate_error(
-        &self,
-        etype: KernelError,
-        msg: KernelStringSlice,
-    ) -> *mut EngineError {
-        self.error_allocator().allocate_error(etype, msg)
-    }
-}
-
-/// Converts a [DeltaResult] into an [ExternResult], using the engine's error allocator.
-///
-/// # Safety
-///
-/// The allocator must be valid.
-trait IntoExternResult<T> {
-    unsafe fn into_extern_result(self, alloc: &dyn AllocateError) -> ExternResult<T>;
-}
-
-impl<T> IntoExternResult<T> for DeltaResult<T> {
-    unsafe fn into_extern_result(self, alloc: &dyn AllocateError) -> ExternResult<T> {
-        match self {
-            Ok(ok) => ExternResult::Ok(ok),
-            Err(err) => {
-                let msg = format!("{}", err);
-                let err = unsafe { alloc.allocate_error(err.into(), kernel_string_slice!(msg)) };
-                ExternResult::Err(err)
-            }
-        }
-    }
-}
-
 // A wrapper for Engine which defines additional FFI-specific methods.
 pub trait ExternEngine: Send + Sync {
     fn engine(&self) -> Arc<dyn Engine>;
@@ -703,6 +515,18 @@ pub unsafe extern "C" fn get_sync_engine(
     get_sync_engine_impl(allocate_error).into_extern_result(&allocate_error)
 }
 
+#[cfg(any(feature = "default-engine", feature = "sync-engine"))]
+fn engine_to_handle(
+    engine: Arc<dyn Engine>,
+    allocate_error: AllocateErrorFn,
+) -> Handle<SharedExternEngine> {
+    let engine: Arc<dyn ExternEngine> = Arc::new(ExternEngineVtable {
+        engine,
+        allocate_error,
+    });
+    engine.into()
+}
+
 #[cfg(feature = "default-engine")]
 fn get_default_engine_impl(
     url: Url,
@@ -716,11 +540,7 @@ fn get_default_engine_impl(
         options,
         Arc::new(TokioBackgroundExecutor::new()),
     );
-    let engine: Arc<dyn ExternEngine> = Arc::new(ExternEngineVtable {
-        engine: Arc::new(engine?),
-        allocate_error,
-    });
-    Ok(engine.into())
+    Ok(engine_to_handle(Arc::new(engine?), allocate_error))
 }
 
 #[cfg(feature = "sync-engine")]
@@ -728,11 +548,7 @@ fn get_sync_engine_impl(
     allocate_error: AllocateErrorFn,
 ) -> DeltaResult<Handle<SharedExternEngine>> {
     let engine = delta_kernel::engine::sync::SyncEngine::new();
-    let engine: Arc<dyn ExternEngine> = Arc::new(ExternEngineVtable {
-        engine: Arc::new(engine),
-        allocate_error,
-    });
-    Ok(engine.into())
+    Ok(engine_to_handle(Arc::new(engine), allocate_error))
 }
 
 /// # Safety
@@ -900,12 +716,31 @@ impl<T> Default for ReferenceSet<T> {
 
 #[cfg(test)]
 mod tests {
+    use delta_kernel::engine::default::{executor::tokio::TokioBackgroundExecutor, DefaultEngine};
+    use object_store::{memory::InMemory, path::Path};
+    use test_utils::{actions_to_string, add_commit, TestAction};
+
     use super::*;
+    use crate::error::{EngineError, KernelError};
 
     #[no_mangle]
     extern "C" fn allocate_err(etype: KernelError, _: KernelStringSlice) -> *mut EngineError {
         let boxed = Box::new(EngineError { etype });
         Box::leak(boxed)
+    }
+
+    #[no_mangle]
+    extern "C" fn allocate_str(kernel_str: KernelStringSlice) -> NullableCvoid {
+        let s = unsafe { String::try_from_slice(&kernel_str) };
+        let ptr = Box::into_raw(Box::new(s.unwrap())).cast(); // never null
+        let ptr = unsafe { NonNull::new_unchecked(ptr) };
+        Some(ptr)
+    }
+
+    // helper to recover a string from the above
+    fn recover_string(ptr: NonNull<c_void>) -> String {
+        let ptr = ptr.as_ptr().cast();
+        *unsafe { Box::from_raw(ptr) }
     }
 
     fn ok_or_panic<T>(result: ExternResult<T>) -> T {
@@ -932,16 +767,52 @@ mod tests {
         }
     }
 
-    #[test]
-    fn engine_builder() {
-        let path = "s3://doesntmatter/foo";
+    fn get_default_engine() -> Handle<SharedExternEngine> {
+        let path = "memory:///doesntmatter/foo";
         let path = kernel_string_slice!(path);
         let builder = unsafe { ok_or_panic(get_engine_builder(path, allocate_err)) };
-        // TODO: When miri supports epoll_wait
-        // let engine = unsafe { builder_build(builder) };
+        unsafe { ok_or_panic(builder_build(builder)) }
+    }
 
-        // for now just rebox so it gets dropped and miri doesn't complain
-        let _box = unsafe { Box::from_raw(builder) };
+    #[test]
+    fn engine_builder() {
+        let engine = get_default_engine();
+        unsafe {
+            free_engine(engine);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_snapshot() -> Result<(), Box<dyn std::error::Error>> {
+        let storage = Arc::new(InMemory::new());
+        add_commit(
+            storage.as_ref(),
+            0,
+            actions_to_string(vec![TestAction::Metadata]),
+        )
+        .await?;
+        let engine = DefaultEngine::new(
+            storage.clone(),
+            Path::from("/"),
+            Arc::new(TokioBackgroundExecutor::new()),
+        );
+        let engine = engine_to_handle(Arc::new(engine), allocate_err);
+        let path = "memory:///";
+
+        let snapshot =
+            unsafe { ok_or_panic(snapshot(kernel_string_slice!(path), engine.shallow_copy())) };
+
+        let version = unsafe { version(snapshot.shallow_copy()) };
+        assert_eq!(version, 0);
+
+        let table_root = unsafe { snapshot_table_root(snapshot.shallow_copy(), allocate_str) };
+        assert!(table_root.is_some());
+        let s = recover_string(table_root.unwrap());
+        assert_eq!(&s, path);
+
+        unsafe { free_snapshot(snapshot) }
+        unsafe { free_engine(engine) }
+        Ok(())
     }
 
     #[test]

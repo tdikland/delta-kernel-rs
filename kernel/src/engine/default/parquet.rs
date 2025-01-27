@@ -109,8 +109,8 @@ impl<E: TaskExecutor> DefaultParquetHandler<E> {
         self
     }
 
-    // Write `data` to `path`/<uuid>.parquet as parquet using ArrowWriter and return the parquet
-    // metadata (where <uuid> is a generated UUIDv4).
+    // Write `data` to `{path}/<uuid>.parquet` as parquet using ArrowWriter and return the parquet
+    // metadata (where `<uuid>` is a generated UUIDv4).
     //
     // Note: after encoding the data as parquet, this issues a PUT followed by a HEAD to storage in
     // order to obtain metadata about the object just written.
@@ -155,8 +155,8 @@ impl<E: TaskExecutor> DefaultParquetHandler<E> {
         Ok(DataFileMetadata::new(file_meta))
     }
 
-    /// Write `data` to `path`/<uuid>.parquet as parquet using ArrowWriter and return the parquet
-    /// metadata as an EngineData batch which matches the [write metadata] schema (where <uuid> is
+    /// Write `data` to `{path}/<uuid>.parquet` as parquet using ArrowWriter and return the parquet
+    /// metadata as an EngineData batch which matches the [write metadata] schema (where `<uuid>` is
     /// a generated UUIDv4).
     ///
     /// [write metadata]: crate::transaction::get_write_metadata_schema
@@ -258,7 +258,7 @@ impl FileOpener for ParquetOpener {
             let mut reader = ParquetObjectReader::new(store, meta);
             let metadata = ArrowReaderMetadata::load_async(&mut reader, Default::default()).await?;
             let parquet_schema = metadata.schema();
-            let (indicies, requested_ordering) =
+            let (indices, requested_ordering) =
                 get_requested_indices(&table_schema, parquet_schema)?;
             let options = ArrowReaderOptions::new(); //.with_page_index(enable_page_index);
             let mut builder =
@@ -267,7 +267,7 @@ impl FileOpener for ParquetOpener {
                 &table_schema,
                 parquet_schema,
                 builder.parquet_schema(),
-                &indicies,
+                &indices,
             ) {
                 builder = builder.with_projection(mask)
             }
@@ -330,7 +330,7 @@ impl FileOpener for PresignedUrlOpener {
             let reader = client.get(file_meta.location).send().await?.bytes().await?;
             let metadata = ArrowReaderMetadata::load(&reader, Default::default())?;
             let parquet_schema = metadata.schema();
-            let (indicies, requested_ordering) =
+            let (indices, requested_ordering) =
                 get_requested_indices(&table_schema, parquet_schema)?;
 
             let options = ArrowReaderOptions::new();
@@ -340,7 +340,7 @@ impl FileOpener for PresignedUrlOpener {
                 &table_schema,
                 parquet_schema,
                 builder.parquet_schema(),
-                &indicies,
+                &indices,
             ) {
                 builder = builder.with_projection(mask)
             }

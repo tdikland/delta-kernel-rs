@@ -1,38 +1,12 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "arrow.h"
 #include "read_table.h"
 #include "schema.h"
-
-// some diagnostic functions
-void print_diag(char* fmt, ...)
-{
-#ifdef VERBOSE
-  va_list args;
-  va_start(args, fmt);
-  vprintf(fmt, args);
-  va_end(args);
-#else
-  (void)(fmt);
-#endif
-}
-
-// Print out an error message, plus the code and kernel message of an error
-void print_error(const char* msg, Error* err)
-{
-  printf("[ERROR] %s\n", msg);
-  printf("  Kernel Code: %i\n", err->etype.etype);
-  printf("  Kernel Msg: %s\n", err->msg);
-}
-
-// free an error
-void free_error(Error* error)
-{
-  free(error->msg);
-  free(error);
-}
+#include "kernel_utils.h"
 
 // Print the content of a selection vector if `VERBOSE` is defined in read_table.h
 void print_selection_vector(const char* indent, const KernelBoolSlice* selection_vec)
@@ -68,45 +42,8 @@ void print_partition_info(struct EngineContext* context, const CStringMap* parti
 #endif
 }
 
-// kernel will call this to allocate our errors. This can be used to create an "engine native" type
-// error
-EngineError* allocate_error(KernelError etype, const KernelStringSlice msg)
-{
-  Error* error = malloc(sizeof(Error));
-  error->etype.etype = etype;
-  char* charmsg = allocate_string(msg);
-  error->msg = charmsg;
-  return (EngineError*)error;
-}
-
-#ifdef WIN32 // windows doesn't have strndup
-char *strndup(const char *s, size_t n) {
-  size_t len = strnlen(s, n);
-  char *p = malloc(len + 1);
-  if (p) {
-    memcpy(p, s, len);
-    p[len] = '\0';
-  }
-  return p;
-}
-#endif
-
-// utility to turn a slice into a char*
-void* allocate_string(const KernelStringSlice slice)
-{
-  return strndup(slice.ptr, slice.len);
-}
-
-// utility function to convert key/val into slices and set them on a builder
-void set_builder_opt(EngineBuilder* engine_builder, char* key, char* val)
-{
-  KernelStringSlice key_slice = { key, strlen(key) };
-  KernelStringSlice val_slice = { val, strlen(val) };
-  set_builder_option(engine_builder, key_slice, val_slice);
-}
-
 // Kernel will call this function for each file that should be scanned. The arguments include enough
-// context to constuct the correct logical data from the physically read parquet
+// context to construct the correct logical data from the physically read parquet
 void scan_row_callback(
   void* engine_context,
   KernelStringSlice path,
@@ -214,12 +151,67 @@ void free_partition_list(PartitionList* list) {
   free(list);
 }
 
+static const char *LEVEL_STRING[] = {
+  "ERROR", "WARN", "INFO", "DEBUG", "TRACE"
+};
+
+// define some ansi color escapes so we can have nice colored output in our logs
+#define RED   "\x1b[31m"
+#define BLUE  "\x1b[34m"
+#define DIM   "\x1b[2m"
+#define RESET "\x1b[0m"
+
+void tracing_callback(struct Event event) {
+  struct timeval tv;
+  char buffer[32];
+  gettimeofday(&tv, NULL);
+  struct tm *tm_info = gmtime(&tv.tv_sec);
+  strftime(buffer, 26, "%Y-%m-%dT%H:%M:%S", tm_info);
+  char* level_color = event.level < 3 ? RED : BLUE;
+  printf(
+    "%s%s.%06dZ%s [%sKernel %s%s] %s%.*s%s: %.*s\n",
+    DIM,
+    buffer,
+    (int)tv.tv_usec, // safe, microseconds are in int range
+    RESET,
+    level_color,
+    LEVEL_STRING[event.level],
+    RESET,
+    DIM,
+    (int)event.target.len,
+    event.target.ptr,
+    RESET,
+    (int)event.message.len,
+    event.message.ptr);
+  if (event.file.ptr) {
+    printf(
+      "  %sat%s %.*s:%i\n",
+      DIM,
+      RESET,
+      (int)event.file.len,
+      event.file.ptr,
+      event.line);
+  }
+}
+
+void log_line_callback(KernelStringSlice line) {
+  printf("%.*s", (int)line.len, line.ptr);
+}
+
 int main(int argc, char* argv[])
 {
   if (argc < 2) {
     printf("Usage: %s table/path\n", argv[0]);
     return -1;
   }
+
+#ifdef VERBOSE
+  enable_event_tracing(tracing_callback, TRACE);
+  // we could also do something like this if we want less control over formatting
+  // enable_formatted_log_line_tracing(log_line_callback, TRACE, FULL, true, true, false, false);
+#else
+  enable_event_tracing(tracing_callback, INFO);
+#endif
 
   char* table_path = argv[1];
   printf("Reading table at %s\n", table_path);

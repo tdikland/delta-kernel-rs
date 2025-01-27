@@ -1,4 +1,4 @@
-//! Defintions of errors that the delta kernel can encounter
+//! Definitions of errors that the delta kernel can encounter
 
 use std::{
     backtrace::{Backtrace, BacktraceStatus},
@@ -6,7 +6,9 @@ use std::{
     str::Utf8Error,
 };
 
-use crate::schema::DataType;
+use crate::schema::{DataType, StructType};
+use crate::table_properties::ParseIntervalError;
+use crate::Version;
 
 /// A [`std::result::Result`] that has the kernel [`Error`] as the error variant
 pub type DeltaResult<T, E = Error> = std::result::Result<T, E>;
@@ -25,7 +27,7 @@ pub enum Error {
     },
 
     /// An error performing operations on arrow data
-    #[cfg(any(feature = "default-engine", feature = "sync-engine"))]
+    #[cfg(any(feature = "default-engine-base", feature = "sync-engine"))]
     #[error(transparent)]
     Arrow(arrow_schema::ArrowError),
 
@@ -56,7 +58,7 @@ pub enum Error {
     #[error("Internal error {0}. This is a kernel bug, please report.")]
     InternalError(String),
 
-    /// An error enountered while working with parquet data
+    /// An error encountered while working with parquet data
     #[cfg(feature = "parquet")]
     #[error("Arrow error: {0}")]
     Parquet(#[from] parquet::errors::ParquetError),
@@ -73,7 +75,7 @@ pub enum Error {
     #[error("Object store path error: {0}")]
     ObjectStorePath(#[from] object_store::path::Error),
 
-    #[cfg(feature = "default-engine")]
+    #[cfg(any(feature = "default-engine", feature = "default-engine-rustls"))]
     #[error("Reqwest Error: {0}")]
     Reqwest(#[from] reqwest::Error),
 
@@ -97,7 +99,7 @@ pub enum Error {
     #[error("No table version found.")]
     MissingVersion,
 
-    /// An error occured while working with deletion vectors
+    /// An error occurred while working with deletion vectors
     #[error("Deletion Vector error: {0}")]
     DeletionVector(String),
 
@@ -116,6 +118,10 @@ pub enum Error {
     /// There was no protocol action in the delta log
     #[error("No protocol found in delta log.")]
     MissingProtocol,
+
+    /// Invalid protocol action was read from the log
+    #[error("Invalid protocol action in the delta log: {0}")]
+    InvalidProtocol(String),
 
     /// Neither metadata nor protocol could be found in the delta log
     #[error("No table metadata or protocol found in delta log.")]
@@ -171,6 +177,24 @@ pub enum Error {
     /// The file already exists at the path, prohibiting a non-overwrite write
     #[error("File already exists: {0}")]
     FileAlreadyExists(String),
+
+    /// Some functionality is currently unsupported
+    #[error("Unsupported: {0}")]
+    Unsupported(String),
+
+    /// Parsing error when attempting to deserialize an interval
+    #[error(transparent)]
+    ParseIntervalError(#[from] ParseIntervalError),
+
+    #[error("Change data feed is unsupported for the table at version {0}")]
+    ChangeDataFeedUnsupported(Version),
+
+    #[error("Change data feed encountered incompatible schema. Expected {0}, got {1}")]
+    ChangeDataFeedIncompatibleSchema(String, String),
+
+    /// Invalid checkpoint files
+    #[error("Invalid Checkpoint: {0}")]
+    InvalidCheckpoint(String),
 }
 
 // Convenience constructors for Error types that take a String argument
@@ -227,6 +251,27 @@ impl Error {
         Self::InternalError(msg.to_string()).with_backtrace()
     }
 
+    pub fn invalid_protocol(msg: impl ToString) -> Self {
+        Self::InvalidProtocol(msg.to_string())
+    }
+
+    pub fn unsupported(msg: impl ToString) -> Self {
+        Self::Unsupported(msg.to_string())
+    }
+    pub fn change_data_feed_unsupported(version: impl Into<Version>) -> Self {
+        Self::ChangeDataFeedUnsupported(version.into())
+    }
+    pub(crate) fn change_data_feed_incompatible_schema(
+        expected: &StructType,
+        actual: &StructType,
+    ) -> Self {
+        Self::ChangeDataFeedIncompatibleSchema(format!("{expected:?}"), format!("{actual:?}"))
+    }
+
+    pub fn invalid_checkpoint(msg: impl ToString) -> Self {
+        Self::InvalidCheckpoint(msg.to_string())
+    }
+
     // Capture a backtrace when the error is constructed.
     #[must_use]
     pub fn with_backtrace(self) -> Self {
@@ -258,7 +303,7 @@ from_with_backtrace!(
     (std::io::Error, IOError)
 );
 
-#[cfg(any(feature = "default-engine", feature = "sync-engine"))]
+#[cfg(any(feature = "default-engine-base", feature = "sync-engine"))]
 impl From<arrow_schema::ArrowError> for Error {
     fn from(value: arrow_schema::ArrowError) -> Self {
         Self::Arrow(value).with_backtrace()

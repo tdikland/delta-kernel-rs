@@ -5,7 +5,8 @@ use std::ffi::c_void;
 
 use crate::{handle::Handle, kernel_string_slice, KernelStringSlice};
 use delta_kernel::expressions::{
-    ArrayData, BinaryOperator, Expression, Scalar, StructData, UnaryOperator, VariadicOperator,
+    ArrayData, BinaryExpression, BinaryOperator, Expression, Scalar, StructData, UnaryExpression,
+    UnaryOperator, VariadicExpression, VariadicOperator,
 };
 
 /// Free the memory the passed SharedExpression
@@ -53,7 +54,7 @@ type VisitUnaryFn = extern "C" fn(data: *mut c_void, sibling_list_id: usize, chi
 /// to visitor methods
 /// TODO: Visit type information in struct field and null. This will likely involve using the schema
 /// visitor. Note that struct literals are currently in flux, and may change significantly. Here is the relevant
-/// issue: https://github.com/delta-incubator/delta-kernel-rs/issues/412
+/// issue: https://github.com/delta-io/delta-kernel-rs/issues/412
 #[repr(C)]
 pub struct EngineExpressionVisitor {
     /// An opaque engine state pointer
@@ -82,7 +83,7 @@ pub struct EngineExpressionVisitor {
     /// Visit a 64bit timestamp belonging to the list identified by `sibling_list_id`.
     /// The timestamp is microsecond precision with no timezone.
     pub visit_literal_timestamp_ntz: VisitLiteralFn<i64>,
-    /// Visit a 32bit intger `date` representing days since UNIX epoch 1970-01-01.  The `date` belongs
+    /// Visit a 32bit integer `date` representing days since UNIX epoch 1970-01-01.  The `date` belongs
     /// to the list identified by `sibling_list_id`.
     pub visit_literal_date: VisitLiteralFn<i32>,
     /// Visit binary data at the `buffer` with length `len` belonging to the list identified by
@@ -330,7 +331,7 @@ pub unsafe extern "C" fn visit_expression(
             Expression::Struct(exprs) => {
                 visit_expression_struct_expr(visitor, exprs, sibling_list_id)
             }
-            Expression::BinaryOperation { op, left, right } => {
+            Expression::Binary(BinaryExpression { op, left, right }) => {
                 let child_list_id = call!(visitor, make_field_list, 2);
                 visit_expression_impl(visitor, left, child_list_id);
                 visit_expression_impl(visitor, right, child_list_id);
@@ -351,7 +352,7 @@ pub unsafe extern "C" fn visit_expression(
                 };
                 op(visitor.data, sibling_list_id, child_list_id);
             }
-            Expression::UnaryOperation { op, expr } => {
+            Expression::Unary(UnaryExpression { op, expr }) => {
                 let child_id_list = call!(visitor, make_field_list, 1);
                 visit_expression_impl(visitor, expr, child_id_list);
                 let op = match op {
@@ -360,7 +361,7 @@ pub unsafe extern "C" fn visit_expression(
                 };
                 op(visitor.data, sibling_list_id, child_id_list);
             }
-            Expression::VariadicOperation { op, exprs } => {
+            Expression::Variadic(VariadicExpression { op, exprs }) => {
                 visit_expression_variadic(visitor, op, exprs, sibling_list_id)
             }
         }
